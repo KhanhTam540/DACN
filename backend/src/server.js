@@ -1,6 +1,6 @@
 const app = require("./app");
-const db = require("./models");
-const { TaiKhoan, NhanSuYTe } = db;
+const { sequelize, TaiKhoan, NhanSuYTe, ChatRooms } = require("./models");
+const { testConnection } = require("./config/database");
 const http = require("http");
 const { Server } = require("socket.io");
 const jwt = require("jsonwebtoken");
@@ -15,7 +15,7 @@ const server = http.createServer(app);
 // Khởi tạo Socket.IO server
 const io = new Server(server, {
   cors: {
-    origin: ["http://localhost:5173", "http://localhost:4000", "http://localhost:5174","http://localhost:5175" ], 
+    origin: ["http://localhost:5173", "http://localhost:4000", "http://localhost:5174","http://localhost:5175"], 
     methods: ["GET", "POST"],
     credentials: true
   }
@@ -32,13 +32,13 @@ io.use((socket, next) => {
     return next(new Error("Xác thực thất bại: Không có token"));
   }
 
-  // SỬA LỖI CUỐI CÙNG: Xử lý định dạng token an toàn
+  // Xử lý định dạng token an toàn
   const parts = authHeader.split(" ");
   // Lấy token, loại bỏ "Bearer " nếu tồn tại
   const token = parts.length === 2 && parts[0] === 'Bearer' ? parts[1] : authHeader;
   
   if (!token) {
-       return next(new Error("Xác thực thất bại: Token không hợp lệ"));
+    return next(new Error("Xác thực thất bại: Token không hợp lệ"));
   }
 
   jwt.verify(token, SECRET_KEY, (err, decoded) => {
@@ -65,7 +65,7 @@ io.on("connection", (socket) => {
     if (senderId === receiverId) return; 
 
     try {
-      // ✅ Kiểm tra xem có cần chấp nhận không (chỉ bệnh nhân chat với admin/y tá)
+      // Kiểm tra xem có cần chấp nhận không (chỉ bệnh nhân chat với admin/y tá)
       const senderUser = await TaiKhoan.findByPk(senderId);
       const receiverUser = await TaiKhoan.findByPk(receiverId);
       
@@ -84,7 +84,7 @@ io.on("connection", (socket) => {
         }
       }
 
-      // ✅ CHỈ BỆNH NHÂN mới có thể gửi yêu cầu chat tới admin/y tá (cần chấp nhận)
+      // CHỈ BỆNH NHÂN mới có thể gửi yêu cầu chat tới admin/y tá (cần chấp nhận)
       // Admin/y tá chat với bệnh nhân sẽ tự động tạo phòng (không cần chấp nhận)
       const isSenderBenhNhan = senderUser.maNhom === 'BENHNHAN';
       const needsAcceptance = isSenderBenhNhan && isReceiverAdminOrYTa;
@@ -100,7 +100,7 @@ io.on("connection", (socket) => {
         const existingRoom = await chatService.findRoom(senderId, receiverId);
         if (existingRoom && existingRoom.trangThai === 'EXPIRED') {
           // Nếu phòng đã hết hạn, xóa và tạo yêu cầu mới
-          await db.ChatRooms.update(
+          await ChatRooms.update(
             { trangThai: 'PENDING' },
             { where: { roomName: existingRoom.roomName } }
           );
@@ -160,7 +160,7 @@ io.on("connection", (socket) => {
       const requestKey = [requesterId, accepterId].sort().join('_');
       
       if (pendingRequests[requestKey]) {
-          delete pendingRequests[requestKey];
+        delete pendingRequests[requestKey];
       }
 
       // 2a. Tạo/Tìm phòng chat và set thời gian bắt đầu chat
@@ -209,7 +209,7 @@ io.on("connection", (socket) => {
     const requestKey = [requesterId, rejecterId].sort().join('_');
     
     if (pendingRequests[requestKey]) {
-        delete pendingRequests[requestKey];
+      delete pendingRequests[requestKey];
     }
     
     // Gửi thông báo từ chối đến người yêu cầu
@@ -218,75 +218,75 @@ io.on("connection", (socket) => {
     console.log(`❌ ${socket.user.tenDangNhap} đã từ chối chat từ ${requesterId}.`);
   });
 
-  // === 4. Mở lại phòng chat đã kích hoạt hoặc xem lịch sử (Khác với joinRoom cũ) ===
+  // === 4. Mở lại phòng chat đã kích hoạt hoặc xem lịch sử ===
   socket.on("openActiveRoom", async ({ receiverId }) => {
     try {
-        const senderId = socket.user.maTK;
-        const existingRoom = await chatService.findRoom(senderId, receiverId);
-        
-        if (!existingRoom) {
-             // Nếu không tìm thấy phòng (chưa chat lần nào), trả về lịch sử rỗng và không join room
-             return socket.emit("roomHistory", { room: null, history: [] });
-        }
-        
-        const roomName = existingRoom.roomName;
-        
-        // ✅ Kiểm tra thời gian 15 phút nếu là bệnh nhân chat với admin/y tá
-        const senderUser = await TaiKhoan.findByPk(senderId);
-        const receiverUser = await TaiKhoan.findByPk(receiverId);
-        
-        if (senderUser && receiverUser) {
-          let isReceiverAdminOrYTa = false;
-          if (receiverUser.maNhom === 'ADMIN') {
+      const senderId = socket.user.maTK;
+      const existingRoom = await chatService.findRoom(senderId, receiverId);
+      
+      if (!existingRoom) {
+        // Nếu không tìm thấy phòng (chưa chat lần nào), trả về lịch sử rỗng và không join room
+        return socket.emit("roomHistory", { room: null, history: [] });
+      }
+      
+      const roomName = existingRoom.roomName;
+      
+      // Kiểm tra thời gian 15 phút nếu là bệnh nhân chat với admin/y tá
+      const senderUser = await TaiKhoan.findByPk(senderId);
+      const receiverUser = await TaiKhoan.findByPk(receiverId);
+      
+      if (senderUser && receiverUser) {
+        let isReceiverAdminOrYTa = false;
+        if (receiverUser.maNhom === 'ADMIN') {
+          isReceiverAdminOrYTa = true;
+        } else if (receiverUser.maNhom === 'NHANSU') {
+          const nhanSu = await NhanSuYTe.findOne({ where: { maTK: receiverId } });
+          if (nhanSu && nhanSu.loaiNS === 'YT') {
             isReceiverAdminOrYTa = true;
-          } else if (receiverUser.maNhom === 'NHANSU') {
-            const nhanSu = await NhanSuYTe.findOne({ where: { maTK: receiverId } });
-            if (nhanSu && nhanSu.loaiNS === 'YT') {
-              isReceiverAdminOrYTa = true;
-            }
-          }
-          
-          const needsTimeLimit = senderUser.maNhom === 'BENHNHAN' && isReceiverAdminOrYTa;
-          
-          if (needsTimeLimit && !chatService.isChatActive(existingRoom)) {
-            // Hết thời gian: cập nhật trạng thái
-            await db.ChatRooms.update(
-              { trangThai: 'EXPIRED' },
-              { where: { roomName } }
-            );
-            
-            // Gửi thông báo hết thời gian
-            socket.emit("chatExpired", { 
-              message: "Cuộc trò chuyện đã hết hạn (15 phút). Vui lòng gửi yêu cầu chat mới." 
-            });
-            
-            // Vẫn trả về lịch sử nhưng với trạng thái EXPIRED
-            const history = await chatService.getRoomHistory(roomName);
-            return socket.emit("roomHistory", { 
-              room: roomName, 
-              history,
-              trangThai: 'EXPIRED',
-              message: "Cuộc trò chuyện đã hết hạn (15 phút). Vui lòng gửi yêu cầu chat mới."
-            });
           }
         }
         
-        // Join phòng socket để nhận tin nhắn mới
-        socket.join(roomName);
-        console.log(`User ${socket.user.tenDangNhap} đã mở lại phòng: ${roomName}`);
+        const needsTimeLimit = senderUser.maNhom === 'BENHNHAN' && isReceiverAdminOrYTa;
         
-        // Load lịch sử tin nhắn
-        const history = await chatService.getRoomHistory(roomName);
-        socket.emit("roomHistory", { 
-          room: roomName, 
-          history,
-          trangThai: existingRoom.trangThai,
-          thoiGianBatDauChat: existingRoom.thoiGianBatDauChat ? existingRoom.thoiGianBatDauChat.toISOString() : null
-        });
-        
+        if (needsTimeLimit && !chatService.isChatActive(existingRoom)) {
+          // Hết thời gian: cập nhật trạng thái
+          await ChatRooms.update(
+            { trangThai: 'EXPIRED' },
+            { where: { roomName } }
+          );
+          
+          // Gửi thông báo hết thời gian
+          socket.emit("chatExpired", { 
+            message: "Cuộc trò chuyện đã hết hạn (15 phút). Vui lòng gửi yêu cầu chat mới." 
+          });
+          
+          // Vẫn trả về lịch sử nhưng với trạng thái EXPIRED
+          const history = await chatService.getRoomHistory(roomName);
+          return socket.emit("roomHistory", { 
+            room: roomName, 
+            history,
+            trangThai: 'EXPIRED',
+            message: "Cuộc trò chuyện đã hết hạn (15 phút). Vui lòng gửi yêu cầu chat mới."
+          });
+        }
+      }
+      
+      // Join phòng socket để nhận tin nhắn mới
+      socket.join(roomName);
+      console.log(`User ${socket.user.tenDangNhap} đã mở lại phòng: ${roomName}`);
+      
+      // Load lịch sử tin nhắn
+      const history = await chatService.getRoomHistory(roomName);
+      socket.emit("roomHistory", { 
+        room: roomName, 
+        history,
+        trangThai: existingRoom.trangThai,
+        thoiGianBatDauChat: existingRoom.thoiGianBatDauChat ? existingRoom.thoiGianBatDauChat.toISOString() : null
+      });
+      
     } catch (error) {
-       console.error("Lỗi khi mở lại phòng:", error);
-       socket.emit("chatError", { message: "Không thể mở lại phòng" });
+      console.error("Lỗi khi mở lại phòng:", error);
+      socket.emit("chatError", { message: "Không thể mở lại phòng" });
     }
   });
   
@@ -303,10 +303,10 @@ io.on("connection", (socket) => {
       // KIỂM TRA PHÒNG ĐÃ ĐƯỢC TẠO CHƯA (phòng phải tồn tại trong DB)
       const existingRoom = await chatService.findRoom(senderId, receiverId);
       if (!existingRoom) {
-          return socket.emit("chatError", { message: "Phòng chat chưa được kích hoạt. Vui lòng gửi yêu cầu chat trước." });
+        return socket.emit("chatError", { message: "Phòng chat chưa được kích hoạt. Vui lòng gửi yêu cầu chat trước." });
       }
       
-      // ✅ KIỂM TRA THỜI GIAN 15 PHÚT (chỉ cho bệnh nhân chat với admin/y tá)
+      // KIỂM TRA THỜI GIAN 15 PHÚT (chỉ cho bệnh nhân chat với admin/y tá)
       const senderUser = await TaiKhoan.findByPk(senderId);
       const receiverUser = await TaiKhoan.findByPk(receiverId);
       
@@ -327,7 +327,7 @@ io.on("connection", (socket) => {
           // Kiểm tra thời gian 15 phút
           if (!chatService.isChatActive(existingRoom)) {
             // Hết thời gian: cập nhật trạng thái và yêu cầu chấp nhận lại
-            await db.ChatRooms.update(
+            await ChatRooms.update(
               { trangThai: 'EXPIRED' },
               { where: { roomName: existingRoom.roomName } }
             );
@@ -355,7 +355,7 @@ io.on("connection", (socket) => {
       });
 
       if (!savedMessage) { 
-         throw new Error("Không thể lưu tin nhắn"); 
+        throw new Error("Không thể lưu tin nhắn"); 
       }
 
       // 2. Đảm bảo cả sender và receiver đều join room (nếu chưa join)
@@ -398,24 +398,58 @@ io.on("connection", (socket) => {
   });
 });
 
-// Đồng bộ models với CSDL và khởi động server
-db.sequelize.authenticate()
-  .then(() => {
+// Khởi động server với kiểm tra kết nối database
+async function startServer() {
+  try {
+    // Kiểm tra kết nối MySQL qua connection pool
+    const dbConnected = await testConnection();
+    if (!dbConnected) {
+      console.error("❌ Không thể kết nối database. Server sẽ không khởi động.");
+      process.exit(1);
+    }
+    
+    // Kiểm tra kết nối Sequelize
+    await sequelize.authenticate();
     console.log("✅ Kết nối CSDL thành công.");
     
-    // ✅ Khởi động job hủy lịch hết hạn thanh toán
-    const { startCancelJob } = require("./services/cancelAppointmentJob");
-    startCancelJob();
+    // Khởi động job hủy lịch hết hạn thanh toán
+    try {
+      const { startCancelJob } = require("./services/cancelAppointmentJob");
+      startCancelJob();
+      console.log("✅ Đã khởi động job hủy lịch hẹn hết hạn.");
+    } catch (err) {
+      console.warn("⚠️ Không thể khởi động cancelAppointmentJob:", err.message);
+    }
     
-    // ✅ Khởi động job ngưng chat hết hạn (15 phút)
-    const { startExpireChatJob } = require("./services/expireChatJob");
-    startExpireChatJob();
+    // Khởi động job ngưng chat hết hạn (15 phút)
+    try {
+      const { startExpireChatJob } = require("./services/expireChatJob");
+      startExpireChatJob();
+      console.log("✅ Đã khởi động job hết hạn chat.");
+    } catch (err) {
+      console.warn("⚠️ Không thể khởi động expireChatJob:", err.message);
+    }
     
     // Khởi động server HTTP (đã bao gồm app và io)
     server.listen(PORT, () => {
       console.log(`🚀 Server đang chạy (bao gồm Socket.IO) tại http://localhost:${PORT}`);
     });
-  })
-  .catch((err) => {
-    console.error("❌ Lỗi kết nối Sequelize:", err);
-  });
+  } catch (error) {
+    console.error("❌ Lỗi khởi động server:", error);
+    process.exit(1);
+  }
+}
+
+// Bắt lỗi unhandled rejection
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("❌ Unhandled Rejection at:", promise, "reason:", reason);
+});
+
+// Bắt lỗi uncaught exception
+process.on("uncaughtException", (error) => {
+  console.error("❌ Uncaught Exception:", error);
+  process.exit(1);
+});
+
+// Khởi động server
+startServer();
